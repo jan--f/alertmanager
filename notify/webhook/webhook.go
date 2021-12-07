@@ -28,6 +28,8 @@ import (
 	"github.com/prometheus/alertmanager/notify"
 	"github.com/prometheus/alertmanager/template"
 	"github.com/prometheus/alertmanager/types"
+
+	jsonnet "github.com/google/go-jsonnet"
 )
 
 // Notifier implements a Notifier for generic webhooks.
@@ -65,9 +67,10 @@ type Message struct {
 	*template.Data
 
 	// The protocol version.
-	Version         string `json:"version"`
-	GroupKey        string `json:"groupKey"`
-	TruncatedAlerts uint64 `json:"truncatedAlerts"`
+	Version         string            `json:"version"`
+	GroupKey        string            `json:"groupKey"`
+	TruncatedAlerts uint64            `json:"truncatedAlerts"`
+	Message         map[string]string `json:"message,omitempty"`
 }
 
 func truncateAlerts(maxAlerts uint64, alerts []*types.Alert) ([]*types.Alert, uint64) {
@@ -95,6 +98,15 @@ func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, er
 		TruncatedAlerts: numTruncated,
 	}
 
+	if n.conf.MessageTemplate != "" {
+		vm := jsonnet.MakeVM()
+		message, err := evalJsonnetTemplate(vm, n.conf.MessageTemplate, data)
+		if err != nil {
+			return false, err
+		}
+		msg.Message = message
+	}
+
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(msg); err != nil {
 		return false, err
@@ -107,4 +119,26 @@ func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, er
 	notify.Drain(resp)
 
 	return n.retrier.Check(resp.StatusCode, nil)
+}
+
+func evalJsonnetTemplate(vm *jsonnet.VM, template string, data *template.Data) (map[string]string, error) {
+	dataImport, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	memImporter := jsonnet.MemoryImporter{
+		Data: map[string]jsonnet.Contents{
+			"data.libsonnet": jsonnet.MakeContents(string(dataImport)),
+		},
+	}
+	var im jsonnet.Importer
+	im = &memImporter
+
+	vm.Importer(im)
+
+	msgJson, err := vm.EvaluateAnonymousSnippetMulti("message.jsonnet", template)
+	if err != nil {
+		return nil, err
+	}
+	return msgJson, nil
 }

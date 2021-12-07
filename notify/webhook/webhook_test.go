@@ -14,17 +14,24 @@
 package webhook
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/go-kit/log"
 	commoncfg "github.com/prometheus/common/config"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
 
 	"github.com/prometheus/alertmanager/config"
+	"github.com/prometheus/alertmanager/notify"
 	"github.com/prometheus/alertmanager/notify/test"
+	"github.com/prometheus/alertmanager/template"
 	"github.com/prometheus/alertmanager/types"
+
+	jsonnet "github.com/google/go-jsonnet"
 )
 
 func TestWebhookRetry(t *testing.T) {
@@ -63,4 +70,82 @@ func TestWebhookTruncateAlerts(t *testing.T) {
 	truncatedAlerts, numTruncated = truncateAlerts(100, alerts)
 	require.Len(t, truncatedAlerts, 10)
 	require.EqualValues(t, numTruncated, 0)
+}
+
+func TestWebhookEvalJsonnetTemplate(t *testing.T) {
+	u, err := url.Parse("http://example.com/")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	tmpl := &template.Template{ExternalURL: u}
+	startTime := time.Time{}.Add(1 * time.Second)
+	vm := jsonnet.MakeVM()
+	for _, tc := range []struct {
+		alerts         []*types.Alert
+		name           string
+		templateString string
+		exp            map[string]string
+	}{
+		{
+			name: "test1",
+			alerts: []*types.Alert{
+				{
+					Alert: model.Alert{
+						StartsAt: startTime,
+						Labels: model.LabelSet{
+							model.LabelName("severity"): model.LabelValue("warning"),
+							model.LabelName("job"):      model.LabelValue("foo"),
+						},
+						Annotations: model.LabelSet{
+							model.LabelName("description"): model.LabelValue("something happened"),
+							model.LabelName("runbook"):     model.LabelValue("foo"),
+						},
+					},
+				},
+			},
+			templateString: `local data = import "data.libsonnet";
+			{numAlerts: std.length(data["alerts"])}`,
+			exp: map[string]string{
+				"numAlerts": "1\n",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			templateData := notify.GetTemplateData(ctx, tmpl, tc.alerts, log.NewNopLogger())
+			evaluated, err := evalJsonnetTemplate(vm, tc.templateString, templateData)
+			require.NoError(t, err)
+			require.Equal(t, tc.exp, evaluated)
+		})
+	}
+}
+
+func BenchmarkWebhookEvalJsonnet(b *testing.B) {
+	b.ReportAllocs()
+	u, _ := url.Parse("http://example.com/")
+	ctx := context.Background()
+	tmpl := &template.Template{ExternalURL: u}
+	startTime := time.Time{}.Add(1 * time.Second)
+	alerts := []*types.Alert{
+		{
+			Alert: model.Alert{
+				StartsAt: startTime,
+				Labels: model.LabelSet{
+					model.LabelName("severity"): model.LabelValue("warning"),
+					model.LabelName("job"):      model.LabelValue("foo"),
+				},
+				Annotations: model.LabelSet{
+					model.LabelName("description"): model.LabelValue("something happened"),
+					model.LabelName("runbook"):     model.LabelValue("foo"),
+				},
+			},
+		},
+	}
+	templateString := `local data = import "data.libsonnet";
+			{numAlerts: std.length(data["alerts"])}`
+	vm := jsonnet.MakeVM()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		templateData := notify.GetTemplateData(ctx, tmpl, alerts, log.NewNopLogger())
+		evalJsonnetTemplate(vm, templateString, templateData)
+	}
 }

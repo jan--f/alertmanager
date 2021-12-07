@@ -391,6 +391,9 @@ type WebhookConfig struct {
 	// Alerts exceeding this threshold will be truncated. Setting this to 0
 	// allows an unlimited number of alerts.
 	MaxAlerts uint64 `yaml:"max_alerts" json:"max_alerts"`
+	// Optional jsonnet template that gets expanded and added to the webhook
+	// body payload under the message key
+	MessageTemplate string `yaml:"message_template,omitempty" json:"message_template,omitempty"`
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
