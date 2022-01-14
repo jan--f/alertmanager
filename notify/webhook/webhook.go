@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/alertmanager/types"
 
 	jsonnet "github.com/google/go-jsonnet"
+	ast "github.com/google/go-jsonnet/ast"
 )
 
 // Notifier implements a Notifier for generic webhooks.
@@ -39,6 +40,8 @@ type Notifier struct {
 	logger  log.Logger
 	client  *http.Client
 	retrier *notify.Retrier
+	jsonnet *jsonnet.VM
+	t       *ast.Node
 }
 
 // New returns a new Webhook.
@@ -46,6 +49,16 @@ func New(conf *config.WebhookConfig, t *template.Template, l log.Logger, httpOpt
 	client, err := commoncfg.NewClientFromConfig(*conf.HTTPConfig, "webhook", httpOpts...)
 	if err != nil {
 		return nil, err
+	}
+
+	var vm *jsonnet.VM
+	var ast ast.Node
+	if conf.MessageTemplate != "" {
+		ast, err = jsonnet.SnippetToAST("foo", conf.MessageTemplate)
+		if err != nil {
+			return nil, err
+		}
+		vm = jsonnet.MakeVM()
 	}
 	return &Notifier{
 		conf:   conf,
@@ -59,6 +72,8 @@ func New(conf *config.WebhookConfig, t *template.Template, l log.Logger, httpOpt
 				return conf.URL.String()
 			},
 		},
+		jsonnet: vm,
+		t:       &ast,
 	}, nil
 }
 
@@ -83,30 +98,7 @@ func truncateAlerts(maxAlerts uint64, alerts []*types.Alert) ([]*types.Alert, ui
 
 // Notify implements the Notifier interface.
 func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, error) {
-	alerts, numTruncated := truncateAlerts(n.conf.MaxAlerts, alerts)
-	data := notify.GetTemplateData(ctx, n.tmpl, alerts, n.logger)
-
-	groupKey, err := notify.ExtractGroupKey(ctx)
-	if err != nil {
-		level.Error(n.logger).Log("err", err)
-	}
-
-	msg := &Message{
-		Version:         "4",
-		Data:            data,
-		GroupKey:        groupKey.String(),
-		TruncatedAlerts: numTruncated,
-	}
-
-	if n.conf.MessageTemplate != "" {
-		vm := jsonnet.MakeVM()
-		message, err := evalJsonnetTemplate(vm, n.conf.MessageTemplate, data)
-		if err != nil {
-			return false, err
-		}
-		msg.Message = message
-	}
-
+	msg := generateMessage(ctx, n.tmpl, n.logger, n.conf.MaxAlerts, n.jsonnet, n.t, alerts)
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(msg); err != nil {
 		return false, err
@@ -121,7 +113,33 @@ func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, er
 	return n.retrier.Check(resp.StatusCode, nil)
 }
 
-func evalJsonnetTemplate(vm *jsonnet.VM, template string, data *template.Data) (map[string]string, error) {
+func generateMessage(ctx context.Context, tmpl *template.Template, logger log.Logger, maxAlerts uint64, jsonnet *jsonnet.VM, t *ast.Node, alerts []*types.Alert) *Message {
+	alerts, numTruncated := truncateAlerts(maxAlerts, alerts)
+	data := notify.GetTemplateData(ctx, tmpl, alerts, logger)
+
+	groupKey, err := notify.ExtractGroupKey(ctx)
+	if err != nil {
+		level.Error(logger).Log("err", err)
+	}
+
+	msg := &Message{
+		Version:         "4",
+		Data:            data,
+		GroupKey:        groupKey.String(),
+		TruncatedAlerts: numTruncated,
+	}
+
+	if jsonnet != nil {
+		message, err := evalJsonnetTemplate(jsonnet, t, data)
+		if err != nil {
+			return nil
+		}
+		msg.Message = message
+	}
+	return msg
+}
+
+func evalJsonnetTemplate(vm *jsonnet.VM, t *ast.Node, data *template.Data) (map[string]string, error) {
 	dataImport, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -136,7 +154,7 @@ func evalJsonnetTemplate(vm *jsonnet.VM, template string, data *template.Data) (
 
 	vm.Importer(im)
 
-	msgJson, err := vm.EvaluateAnonymousSnippetMulti("message.jsonnet", template)
+	msgJson, err := vm.EvaluateMulti(*t)
 	if err != nil {
 		return nil, err
 	}

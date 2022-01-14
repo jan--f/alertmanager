@@ -112,10 +112,41 @@ func TestWebhookEvalJsonnetTemplate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			templateData := notify.GetTemplateData(ctx, tmpl, tc.alerts, log.NewNopLogger())
-			evaluated, err := evalJsonnetTemplate(vm, tc.templateString, templateData)
+			ast, err := jsonnet.SnippetToAST("foo", tc.templateString)
+			if err != nil {
+				require.NoError(t, err)
+			}
+			evaluated, err := evalJsonnetTemplate(vm, &ast, templateData)
 			require.NoError(t, err)
 			require.Equal(t, tc.exp, evaluated)
 		})
+	}
+}
+
+func BenchmarkWebhookEval(b *testing.B) {
+	b.ReportAllocs()
+	u, _ := url.Parse("http://example.com/")
+	ctx := context.Background()
+	tmpl := &template.Template{ExternalURL: u}
+	startTime := time.Time{}.Add(1 * time.Second)
+	alerts := []*types.Alert{
+		{
+			Alert: model.Alert{
+				StartsAt: startTime,
+				Labels: model.LabelSet{
+					model.LabelName("severity"): model.LabelValue("warning"),
+					model.LabelName("job"):      model.LabelValue("foo"),
+				},
+				Annotations: model.LabelSet{
+					model.LabelName("description"): model.LabelValue("something happened"),
+					model.LabelName("runbook"):     model.LabelValue("foo"),
+				},
+			},
+		},
+	}
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, nil, nil, alerts)
 	}
 }
 
@@ -142,10 +173,13 @@ func BenchmarkWebhookEvalJsonnet(b *testing.B) {
 	}
 	templateString := `local data = import "data.libsonnet";
 			{numAlerts: std.length(data["alerts"])}`
+	ast, err := jsonnet.SnippetToAST("foo", templateString)
+	if err != nil {
+		require.NoError(b, err)
+	}
 	vm := jsonnet.MakeVM()
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		templateData := notify.GetTemplateData(ctx, tmpl, alerts, log.NewNopLogger())
-		evalJsonnetTemplate(vm, templateString, templateData)
+		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, vm, &ast, alerts)
 	}
 }
