@@ -103,8 +103,8 @@ func TestWebhookEvalJsonnetTemplate(t *testing.T) {
 					},
 				},
 			},
-			templateString: `local data = import "data.libsonnet";
-			{numAlerts: std.length(data["alerts"])}`,
+			templateString: `
+			{numAlerts: std.length(std.extVar("data")["alerts"])}`,
 			exp: map[string]string{
 				"numAlerts": "1\n",
 			},
@@ -112,11 +112,7 @@ func TestWebhookEvalJsonnetTemplate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			templateData := notify.GetTemplateData(ctx, tmpl, tc.alerts, log.NewNopLogger())
-			ast, err := jsonnet.SnippetToAST("foo", tc.templateString)
-			if err != nil {
-				require.NoError(t, err)
-			}
-			evaluated, err := evalJsonnetTemplate(vm, &ast, templateData)
+			evaluated, err := evalJsonnetTemplate(vm, tc.templateString, templateData)
 			require.NoError(t, err)
 			require.Equal(t, tc.exp, evaluated)
 		})
@@ -146,7 +142,7 @@ func BenchmarkWebhookEval(b *testing.B) {
 	}
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, nil, nil, alerts)
+		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, nil, "", alerts)
 	}
 }
 
@@ -171,15 +167,11 @@ func BenchmarkWebhookEvalJsonnet(b *testing.B) {
 			},
 		},
 	}
-	templateString := `local data = import "data.libsonnet";
-			{numAlerts: std.length(data["alerts"])}`
-	ast, err := jsonnet.SnippetToAST("foo", templateString)
-	if err != nil {
-		require.NoError(b, err)
-	}
+	templateString := `
+			{numAlerts: std.length(std.extVar("data")["alerts"])}`
 	vm := jsonnet.MakeVM()
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, vm, &ast, alerts)
+		generateMessage(ctx, tmpl, log.NewNopLogger(), 100, vm, templateString, alerts)
 	}
 }

@@ -30,7 +30,6 @@ import (
 	"github.com/prometheus/alertmanager/types"
 
 	jsonnet "github.com/google/go-jsonnet"
-	ast "github.com/google/go-jsonnet/ast"
 )
 
 // Notifier implements a Notifier for generic webhooks.
@@ -41,7 +40,6 @@ type Notifier struct {
 	client  *http.Client
 	retrier *notify.Retrier
 	jsonnet *jsonnet.VM
-	t       *ast.Node
 }
 
 // New returns a new Webhook.
@@ -52,12 +50,7 @@ func New(conf *config.WebhookConfig, t *template.Template, l log.Logger, httpOpt
 	}
 
 	var vm *jsonnet.VM
-	var ast ast.Node
 	if conf.MessageTemplate != "" {
-		ast, err = jsonnet.SnippetToAST("foo", conf.MessageTemplate)
-		if err != nil {
-			return nil, err
-		}
 		vm = jsonnet.MakeVM()
 	}
 	return &Notifier{
@@ -73,7 +66,6 @@ func New(conf *config.WebhookConfig, t *template.Template, l log.Logger, httpOpt
 			},
 		},
 		jsonnet: vm,
-		t:       &ast,
 	}, nil
 }
 
@@ -98,7 +90,7 @@ func truncateAlerts(maxAlerts uint64, alerts []*types.Alert) ([]*types.Alert, ui
 
 // Notify implements the Notifier interface.
 func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, error) {
-	msg := generateMessage(ctx, n.tmpl, n.logger, n.conf.MaxAlerts, n.jsonnet, n.t, alerts)
+	msg := generateMessage(ctx, n.tmpl, n.logger, n.conf.MaxAlerts, n.jsonnet, n.conf.MessageTemplate, alerts)
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(msg); err != nil {
 		return false, err
@@ -113,7 +105,7 @@ func (n *Notifier) Notify(ctx context.Context, alerts ...*types.Alert) (bool, er
 	return n.retrier.Check(resp.StatusCode, nil)
 }
 
-func generateMessage(ctx context.Context, tmpl *template.Template, logger log.Logger, maxAlerts uint64, jsonnet *jsonnet.VM, t *ast.Node, alerts []*types.Alert) *Message {
+func generateMessage(ctx context.Context, tmpl *template.Template, logger log.Logger, maxAlerts uint64, jsonnet *jsonnet.VM, t string, alerts []*types.Alert) *Message {
 	alerts, numTruncated := truncateAlerts(maxAlerts, alerts)
 	data := notify.GetTemplateData(ctx, tmpl, alerts, logger)
 
@@ -139,22 +131,14 @@ func generateMessage(ctx context.Context, tmpl *template.Template, logger log.Lo
 	return msg
 }
 
-func evalJsonnetTemplate(vm *jsonnet.VM, t *ast.Node, data *template.Data) (map[string]string, error) {
+func evalJsonnetTemplate(vm *jsonnet.VM, t string, data *template.Data) (map[string]string, error) {
 	dataImport, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
 	}
-	memImporter := jsonnet.MemoryImporter{
-		Data: map[string]jsonnet.Contents{
-			"data.libsonnet": jsonnet.MakeContents(string(dataImport)),
-		},
-	}
-	var im jsonnet.Importer
-	im = &memImporter
+	vm.ExtCode("data", string(dataImport))
 
-	vm.Importer(im)
-
-	msgJson, err := vm.EvaluateMulti(*t)
+	msgJson, err := vm.EvaluateAnonymousSnippetMulti("template.json", t)
 	if err != nil {
 		return nil, err
 	}
