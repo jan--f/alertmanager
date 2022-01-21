@@ -136,7 +136,7 @@ func evalJsonnetTemplate(vm *jsonnet.VM, t string, data *template.Data) (map[str
 	if err != nil {
 		return nil, err
 	}
-	vm.ExtCode("data", string(dataImport))
+	vm.TLACode("data", string(dataImport))
 
 	msgJson, err := vm.EvaluateAnonymousSnippetMulti("template.json", t)
 	if err != nil {

@@ -103,8 +103,8 @@ func TestWebhookEvalJsonnetTemplate(t *testing.T) {
 					},
 				},
 			},
-			templateString: `
-			{numAlerts: std.length(std.extVar("data")["alerts"])}`,
+			templateString: `function(data) {
+			numAlerts: std.length(data["alerts"])}`,
 			exp: map[string]string{
 				"numAlerts": "1\n",
 			},
@@ -167,8 +167,8 @@ func BenchmarkWebhookEvalJsonnet(b *testing.B) {
 			},
 		},
 	}
-	templateString := `
-			{numAlerts: std.length(std.extVar("data")["alerts"])}`
+	templateString := `function(data) {
+			numAlerts: std.length(data["alerts"])}`
 	vm := jsonnet.MakeVM()
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
