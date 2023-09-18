@@ -490,9 +490,10 @@ func (am *Alertmanager) addAlertCommand(alert *TestAlert) ([]byte, error) {
 }
 
 // QueryAlerts uses the amtool cli to query alerts.
-func (am *Alertmanager) QueryAlerts() ([]TestAlert, error) {
+func (am *Alertmanager) QueryAlerts(match ...string) ([]TestAlert, error) {
 	amURLFlag := "--alertmanager.url=" + am.getURL("/")
-	cmd := exec.Command(amtool, amURLFlag, "alert", "query")
+	args := append([]string{amURLFlag, "alert", "query"}, match...)
+	cmd := exec.Command(amtool, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err
@@ -558,9 +559,9 @@ func (am *Alertmanager) addSilenceCommand(sil *TestSilence) ([]byte, error) {
 }
 
 // QuerySilence queries the current silences using the 'amtool silence query' command.
-func (am *Alertmanager) QuerySilence() ([]TestSilence, error) {
+func (am *Alertmanager) QuerySilence(match ...string) ([]TestSilence, error) {
 	amURLFlag := "--alertmanager.url=" + am.getURL("/")
-	args := []string{amURLFlag, "silence", "query"}
+	args := append([]string{amURLFlag, "silence", "query"}, match...)
 	cmd := exec.Command(amtool, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -656,6 +657,28 @@ func (am *Alertmanager) UpdateConfig(conf string) {
 		am.t.Fatal(err)
 		return
 	}
+}
+
+func (am *Alertmanager) ShowRoute() ([]byte, error) {
+	return am.showRouteCommand()
+}
+
+func (am *Alertmanager) showRouteCommand() ([]byte, error) {
+	amURLFlag := "--alertmanager.url=" + am.getURL("/")
+	args := []string{amURLFlag, "config", "routes", "show"}
+	cmd := exec.Command(amtool, args...)
+	return cmd.CombinedOutput()
+}
+
+func (am *Alertmanager) TestRoute() ([]byte, error) {
+	return am.testRouteCommand()
+}
+
+func (am *Alertmanager) testRouteCommand() ([]byte, error) {
+	amURLFlag := "--alertmanager.url=" + am.getURL("/")
+	args := []string{amURLFlag, "config", "routes", "test"}
+	cmd := exec.Command(amtool, args...)
+	return cmd.CombinedOutput()
 }
 
 func (am *Alertmanager) getURL(path string) string {
